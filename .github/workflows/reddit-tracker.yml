@@ -1,13 +1,58 @@
-name: Hello
+name: Reddit Tracker (manual, system Python)
 
 on:
-  workflow_dispatch:  # manual run button
+  workflow_dispatch:  # run from the Actions tab
+
+permissions:
+  contents: write
 
 jobs:
-  test:
+  run:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Say hello
-        run: echo "Hello from GitHub Actions @ $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Show runner Python
+        run: |
+          which python3 || true
+          python3 --version
+          which pip3 || true
+          pip3 --version || true
 
+      - name: Install dependencies
+        working-directory: reddit_tracker
+        run: |
+          python3 -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            python3 -m pip install -r requirements.txt
+          else
+            python3 -m pip install praw pandas python-dotenv
+          fi
+
+      - name: Run tracker
+        working-directory: reddit_tracker
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
+          REDDIT_PASSWORD: ${{ secrets.REDDIT_PASSWORD }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+        run: python3 -u reddit_post_tracker.py
+
+      - name: Record timestamp
+        working-directory: reddit_tracker
+        run: |
+          mkdir -p reddit_metrics
+          echo "UTC: $(date -u '+%Y-%m-%d %H:%M:%S %Z')" > reddit_metrics/last_run_time.txt
+          TZ=America/Los_Angeles date '+PT: %Y-%m-%d %H:%M:%S %Z' >> reddit_metrics/last_run_time.txt
+          echo "MODE: manual" >> reddit_metrics/last_run_time.txt
+
+      - name: Commit outputs
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update reddit metrics (manual)"
+          file_pattern: |
+            reddit_tracker/reddit_metrics/*.csv
+            reddit_tracker/reddit_metrics/last_run_time.txt
