@@ -1,12 +1,9 @@
 name: Reddit Tracker (manual + Pacific midnight)
 
 on:
-  # Auto triggers: 07:00 UTC (PDT midnight) and 08:00 UTC (PST midnight)
   schedule:
-    - cron: "0 7 * * *"
-    - cron: "0 8 * * *"
-  # Manual trigger from Actions tab
-  workflow_dispatch:
+    - cron: "0 8 * * *"   # 08:00 UTC (PST midnight)
+  workflow_dispatch: {}    # manual runs
 
 permissions:
   contents: write
@@ -24,10 +21,8 @@ jobs:
           echo "UTC now: $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
           TZ=America/Los_Angeles date '+PT  now: %Y-%m-%d %H:%M:%S %Z'
 
-      # Decide whether to proceed:
-      # - Always proceed for manual runs
-      # - For scheduled runs, only proceed if local PT hour is 00 (midnight)
-      - name: Decide gate
+      # Decide whether it's actually midnight in Pacific time (00 hour)
+      - name: Decide gate (00 PT?)
         id: decide
         run: |
           export TZ=America/Los_Angeles
@@ -37,6 +32,16 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Determine mode (manual vs scheduled) WITHOUT using inline expressions
+      - name: Determine mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=manual" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=scheduled" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Show runner Python
@@ -109,11 +114,13 @@ PY
       - name: Record timestamp file
         if: ${{ github.event_name == 'workflow_dispatch' || steps.decide.outputs.run == 'true' }}
         working-directory: reddit_tracker
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
         run: |
           mkdir -p reddit_metrics
           echo "UTC: $(date -u '+%Y-%m-%d %H:%M:%S %Z')" > reddit_metrics/last_run_time.txt
           TZ=America/Los_Angeles date '+PT:  %Y-%m-%d %H:%M:%S %Z' >> reddit_metrics/last_run_time.txt
-          echo "MODE: $([[ '${{ github.event_name }}' == 'workflow_dispatch' ]] && echo manual || echo scheduled)" >> reddit_metrics/last_run_time.txt
+          echo "MODE: ${MODE}" >> reddit_metrics/last_run_time.txt
 
       - name: Commit outputs (CSVs + timestamp)
         if: ${{ github.event_name == 'workflow_dispatch' || steps.decide.outputs.run == 'true' }}
@@ -127,11 +134,13 @@ PY
       - name: Run summary
         if: ${{ github.event_name == 'workflow_dispatch' || steps.decide.outputs.run == 'true' }}
         working-directory: reddit_tracker
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
         run: |
           {
             echo "### Reddit Tracker"
+            echo "- Mode: ${MODE}"
             TZ=America/Los_Angeles date '+- Local PT time: %Y-%m-%d %H:%M:%S %Z'
-            echo "- Mode: $([[ '${{ github.event_name }}' == 'workflow_dispatch' ]] && echo manual || echo scheduled)"
             if [ -f reddit_metrics/post_metrics_timeseries.csv ]; then
               echo "- timeseries rows: $(wc -l < reddit_metrics/post_metrics_timeseries.csv)"
             else
@@ -144,6 +153,5 @@ PY
             fi
             echo "- timestamp file present: $( [ -f reddit_metrics/last_run_time.txt ] && echo yes || echo no )"
           } >> "$GITHUB_STEP_SUMMARY"
-
 
 
