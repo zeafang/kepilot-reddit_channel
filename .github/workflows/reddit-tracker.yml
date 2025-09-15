@@ -3,6 +3,7 @@ name: Reddit Tracker (midnight PT + manual test)
 on:
   schedule:
     # UTC cron; we gate to only run at 00:00 PT
+    - cron: "0 7 * * *"   # PDT midnight
     - cron: "0 8 * * *"   # PST midnight
   workflow_dispatch: {}    # manual runs should also update files
 
