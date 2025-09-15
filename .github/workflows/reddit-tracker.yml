@@ -1,11 +1,10 @@
-name: Reddit Tracker (midnight PT + manual test)
+name: Reddit Tracker (PST midnight only)
 
 on:
+  # 08:00 UTC == 00:00 PST (UTC-8). During PDT the gate below will skip.
   schedule:
-    # UTC cron; we gate to only run at 00:00 PT
-    - cron: "0 7 * * *"   # PDT midnight
-    - cron: "0 8 * * *"   # PST midnight
-  workflow_dispatch: {}    # manual runs should also update files
+    - cron: "0 8 * * *"
+  workflow_dispatch: {}    # manual runs should also update files (for testing)
 
 permissions:
   contents: write
@@ -31,15 +30,17 @@ jobs:
           echo "UTC now: $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
           TZ=America/Los_Angeles date '+PT now: %Y-%m-%d %H:%M:%S %Z'
 
-      # Gate logs midnight PT; manual runs will bypass in later steps
-      - name: Gate on Pacific midnight
+      # Gate: proceed ONLY when it's 00:00 and the zone is PST (not PDT)
+      - name: Gate on PST midnight only
         id: gate
         run: |
           export TZ=America/Los_Angeles
           now="$(date '+%Y-%m-%d %H:%M:%S %Z')"
           hour="$(date '+%H')"
+          zone="$(date '+%Z')"
           echo "Local PT time: $now"
-          if [ "$hour" = "00" ]; then
+          echo "Detected zone: $zone"
+          if [ "$hour" = "00" ] && [ "$zone" = "PST" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -47,7 +48,7 @@ jobs:
 
       - name: Note manual bypass
         if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: echo "Manual run detected — bypassing PT gate and executing all steps."
+        run: echo "Manual run detected — bypassing PST-only gate and executing all steps."
 
       - name: Set up Python
         if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -73,8 +74,7 @@ jobs:
           REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
           REDDIT_PASSWORD: ${{ secrets.REDDIT_PASSWORD }}
           REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
-        run: |
-          python reddit_post_tracker.py
+        run: python reddit_post_tracker.py
 
       - name: Record timestamps to file
         if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -85,18 +85,27 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "MODE: manual test" >> reddit_metrics/last_run_time.txt
           else
-            echo "MODE: scheduled" >> reddit_metrics/last_run_time.txt
+            echo "MODE: scheduled (PST-only)" >> reddit_metrics/last_run_time.txt
           fi
 
-      - name: Commit CSVs and timestamp
-        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
+      # Separate commit steps (no inline ternary needed)
+      - name: Commit CSVs and timestamp (manual)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: ${{ github.event_name == 'workflow_dispatch'
-            && 'chore: update reddit metrics (manual test)'
-            || 'chore: update reddit metrics (midnight PT)' }}
+          commit_message: "chore: update reddit metrics (manual test)"
           file_pattern: |
             reddit_tracker/reddit_metrics/*.csv
             reddit_tracker/reddit_metrics/last_run_time.txt
+
+      - name: Commit CSVs and timestamp (scheduled PST midnight)
+        if: ${{ github.event_name != 'workflow_dispatch' && steps.gate.outputs.run == 'true' }}
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update reddit metrics (PST midnight)"
+          file_pattern: |
+            reddit_tracker/reddit_metrics/*.csv
+            reddit_tracker/reddit_metrics/last_run_time.txt
+
 
 
