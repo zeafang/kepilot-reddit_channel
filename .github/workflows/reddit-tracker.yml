@@ -1,13 +1,23 @@
-name: Reddit Tracker (daily)
+name: Reddit Tracker (midnight PT)
 
 on:
+  # GitHub cron is UTC. We trigger at 07:00 (PDT) and 08:00 (PST),
+  # then gate so it only runs when it's actually 00:00 in PT.
   schedule:
-    # once per day at 00:00 UTC (adjust if you want)
     - cron: "0 8 * * *"   # 08:00 UTC → midnight PT during PST
-  workflow_dispatch: {}   # lets you run it manually from the Actions tab
+  workflow_dispatch: {}    # allow manual runs from the Actions tab
 
 permissions:
-  contents: write   # needed to commit CSVs back to the repo
+  contents: write          # needed to commit CSVs back into the repo
+
+concurrency:
+  group: reddit-tracker
+  cancel-in-progress: true
+
+# Run most steps from your subfolder
+defaults:
+  run:
+    working-directory: reddit_tracker
 
 jobs:
   run:
@@ -16,14 +26,36 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        # (defaults.run.working-directory applies after checkout)
+
+      - name: Show current time (UTC & PT)
+        run: |
+          echo "UTC now: $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
+          TZ=America/Los_Angeles date '+PT now: %Y-%m-%d %H:%M:%S %Z'
+
+      # Gate: continue only when it's truly midnight in Pacific time
+      - name: Gate on Pacific midnight
+        id: gate
+        run: |
+          export TZ=America/Los_Angeles
+          now="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+          hour="$(date '+%H')"
+          echo "Local PT time: $now"
+          if [ "$hour" = "00" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Python
+        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install deps
+      - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
         run: |
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
@@ -32,6 +64,7 @@ jobs:
           fi
 
       - name: Run tracker
+        if: steps.gate.outputs.run == 'true'
         env:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
@@ -41,9 +74,21 @@ jobs:
         run: |
           python reddit_post_tracker.py
 
-      # Commit CSVs produced in reddit_metrics/ back into the repo
-      - name: Commit CSVs
+      # Persist a human-readable timestamp of successful runs
+      - name: Record timestamps to file
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          mkdir -p reddit_metrics
+          echo "UTC: $(date -u '+%Y-%m-%d %H:%M:%S %Z')" > reddit_metrics/last_run_time.txt
+          TZ=America/Los_Angeles date '+PT: %Y-%m-%d %H:%M:%S %Z' >> reddit_metrics/last_run_time.txt
+
+      # Commit new/changed CSVs + timestamp back to the repo
+      - name: Commit CSVs and timestamp
+        if: steps.gate.outputs.run == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: update reddit metrics [skip ci]"
-          file_pattern: reddit_metrics/*.csv
+          commit_message: "chore: update reddit metrics (midnight PT)"
+          file_pattern: |
+            reddit_tracker/reddit_metrics/*.csv
+            reddit_tracker/reddit_metrics/last_run_time.txt
+
