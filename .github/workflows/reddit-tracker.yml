@@ -1,0 +1,49 @@
+name: Reddit Tracker (daily)
+
+on:
+  schedule:
+    # once per day at 00:00 UTC (adjust if you want)
+    - cron: "0 8 * * *"   # 08:00 UTC → midnight PT during PST
+  workflow_dispatch: {}   # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write   # needed to commit CSVs back to the repo
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install praw pandas python-dotenv
+          fi
+
+      - name: Run tracker
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
+          REDDIT_PASSWORD: ${{ secrets.REDDIT_PASSWORD }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+        run: |
+          python reddit_post_tracker.py
+
+      # Commit CSVs produced in reddit_metrics/ back into the repo
+      - name: Commit CSVs
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update reddit metrics [skip ci]"
+          file_pattern: reddit_metrics/*.csv
