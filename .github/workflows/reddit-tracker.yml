@@ -56,3 +56,4 @@ jobs:
           file_pattern: |
             reddit_tracker/reddit_metrics/*.csv
             reddit_tracker/reddit_metrics/last_run_time.txt
+
