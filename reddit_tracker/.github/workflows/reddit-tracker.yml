@@ -1,29 +1,64 @@
-name: Reddit Tracker (daily)
+name: Reddit Tracker (PST midnight only)
 
 on:
+  # 08:00 UTC corresponds to 00:00 PST (UTC-8). During PDT this will NOT run past the gate.
   schedule:
-    # once per day at 00:00 UTC (adjust if you want)
-    - cron: "0 0 * * *"
-  workflow_dispatch: {}   # lets you run it manually from the Actions tab
+    - cron: "0 8 * * *"
+  workflow_dispatch: {}    # manual runs should also update files (for testing)
 
 permissions:
-  contents: write   # needed to commit CSVs back to the repo
+  contents: write
+
+concurrency:
+  group: reddit-tracker
+  cancel-in-progress: true
+
+# your code lives in reddit_tracker/
+defaults:
+  run:
+    working-directory: reddit_tracker
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Show current time (UTC & PT)
+        run: |
+          echo "UTC now: $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
+          TZ=America/Los_Angeles date '+PT now: %Y-%m-%d %H:%M:%S %Z'
+
+      # Gate: proceed ONLY when it's 00:00 and the zone is PST (not PDT)
+      - name: Gate on PST midnight only
+        id: gate
+        run: |
+          export TZ=America/Los_Angeles
+          now="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+          hour="$(date '+%H')"
+          zone="$(date '+%Z')"
+          echo "Local PT time: $now"
+          echo "Detected zone: $zone"
+          if [ "$hour" = "00" ] && [ "$zone" = "PST" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Note manual bypass
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: echo "Manual run detected — bypassing PST-only gate and executing all steps."
+
       - name: Set up Python
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install deps
+      - name: Install dependencies
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         run: |
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
@@ -32,6 +67,7 @@ jobs:
           fi
 
       - name: Run tracker
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         env:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
@@ -41,9 +77,25 @@ jobs:
         run: |
           python reddit_post_tracker.py
 
-      # Commit CSVs produced in reddit_metrics/ back into the repo
-      - name: Commit CSVs
+      - name: Record timestamps to file
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          mkdir -p reddit_metrics
+          echo "UTC: $(date -u '+%Y-%m-%d %H:%M:%S %Z')" > reddit_metrics/last_run_time.txt
+          TZ=America/Los_Angeles date '+PT: %Y-%m-%d %H:%M:%S %Z' >> reddit_metrics/last_run_time.txt
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "MODE: manual test" >> reddit_metrics/last_run_time.txt
+          else
+            echo "MODE: scheduled (PST-only)" >> reddit_metrics/last_run_time.txt
+          fi
+
+      - name: Commit CSVs and timestamp
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: update reddit metrics [skip ci]"
-          file_pattern: reddit_metrics/*.csv
+          commit_message: ${{ github.event_name == 'workflow_dispatch'
+            && 'chore: update reddit metrics (manual test)'
+            || 'chore: update reddit metrics (PST midnight)' }}
+          file_pattern: |
+            reddit_tracker/reddit_metrics/*.csv
+            reddit_tracker/reddit_metrics/last_run_time.txt
