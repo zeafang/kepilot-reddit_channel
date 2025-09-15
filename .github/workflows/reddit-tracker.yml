@@ -1,20 +1,13 @@
-name: Sanity Check
+name: Hello
 
 on:
-  workflow_dispatch:      # run manually from the Actions tab
-  # schedule:
-  #   - cron: "0 8 * * *"  # optional: daily at 08:00 UTC (commented out)
+  workflow_dispatch:  # manual run button
 
 jobs:
-  run:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - name: Hello
-        run: echo "Hello from GitHub Actions! UTC=$(date -u '+%Y-%m-%d %H:%M:%S %Z')"
+      - name: Say hello
+        run: echo "Hello from GitHub Actions @ $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: List repo files
-        run: ls -la
 
