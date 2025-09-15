@@ -1,10 +1,9 @@
-name: Reddit Tracker (PST midnight only)
+name: Reddit Tracker (PST midnight only + debug)
 
 on:
-  # 08:00 UTC == 00:00 PST (UTC-8). During PDT the gate below will skip.
   schedule:
-    - cron: "0 8 * * *"
-  workflow_dispatch: {}    # manual runs should also update files (for testing)
+    - cron: "0 8 * * *"   # 00:00 PST == 08:00 UTC
+  workflow_dispatch: {}    # manual runs should also update files
 
 permissions:
   contents: write
@@ -13,7 +12,7 @@ concurrency:
   group: reddit-tracker
   cancel-in-progress: true
 
-# your code lives in reddit_tracker/
+# code is in the subfolder
 defaults:
   run:
     working-directory: reddit_tracker
@@ -30,7 +29,7 @@ jobs:
           echo "UTC now: $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
           TZ=America/Los_Angeles date '+PT now: %Y-%m-%d %H:%M:%S %Z'
 
-      # Gate: proceed ONLY when it's 00:00 and the zone is PST (not PDT)
+      # Gate: only midnight AND zone must be PST; manual runs bypass below
       - name: Gate on PST midnight only
         id: gate
         run: |
@@ -46,9 +45,19 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Note manual bypass
+      - name: Manual bypass note
         if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: echo "Manual run detected — bypassing PST-only gate and executing all steps."
+        run: echo "Manual run -> bypassing PST gate."
+
+      - name: Sanity: list repo tree
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          echo "=== Repo root ==="
+          ls -la ..
+          echo "=== reddit_tracker/ ==="
+          ls -la .
+          echo "=== reddit_tracker/reddit_metrics/ (before run) ==="
+          ls -la reddit_metrics || true
 
       - name: Set up Python
         if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -57,16 +66,32 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
+      - name: Python & pip versions
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          python -V
+          python -m pip -V
+
       - name: Install dependencies
         if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         run: |
           if [ -f requirements.txt ]; then
+            python -m pip install --upgrade pip
             pip install -r requirements.txt
           else
+            python -m pip install --upgrade pip
             pip install praw pandas python-dotenv
           fi
+          python - << 'PY'
+import pkgutil, sys
+mods = ["praw","pandas","dotenv"]
+print("Installed modules:")
+for m in mods:
+    print(f" - {m}:",
+          "OK" if pkgutil.find_loader(m) else "MISSING")
+PY
 
-      - name: Run tracker
+      - name: Sanity: check secrets are present (masked)
         if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         env:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
@@ -74,7 +99,24 @@ jobs:
           REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
           REDDIT_PASSWORD: ${{ secrets.REDDIT_PASSWORD }}
           REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
-        run: python reddit_post_tracker.py
+        run: |
+          echo "Has CLIENT_ID? $([ -n "${REDDIT_CLIENT_ID}" ] && echo yes || echo no)"
+          echo "Has CLIENT_SECRET? $([ -n "${REDDIT_CLIENT_SECRET}" ] && echo yes || echo no)"
+          echo "Username: ${REDDIT_USERNAME}"
+          echo "Has PASSWORD? $([ -n "${REDDIT_PASSWORD}" ] && echo yes || echo no)"
+          echo "User-Agent: ${REDDIT_USER_AGENT}"
+
+      - name: Run tracker (with traceback)
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
+          REDDIT_PASSWORD: ${{ secrets.REDDIT_PASSWORD }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+        run: |
+          set -euxo pipefail
+          python -u reddit_post_tracker.py
 
       - name: Record timestamps to file
         if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -88,7 +130,6 @@ jobs:
             echo "MODE: scheduled (PST-only)" >> reddit_metrics/last_run_time.txt
           fi
 
-      # Separate commit steps (no inline ternary needed)
       - name: Commit CSVs and timestamp (manual)
         if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: stefanzweifel/git-auto-commit-action@v5
@@ -106,6 +147,7 @@ jobs:
           file_pattern: |
             reddit_tracker/reddit_metrics/*.csv
             reddit_tracker/reddit_metrics/last_run_time.txt
+
 
 
 
