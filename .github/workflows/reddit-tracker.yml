@@ -1,20 +1,19 @@
-name: Reddit Tracker (midnight PT)
+name: Reddit Tracker (midnight PT + manual test)
 
 on:
-  # GitHub cron is UTC. We trigger at 07:00 (PDT) and 08:00 (PST),
-  # then gate so it only runs when it's actually 00:00 in PT.
   schedule:
-    - cron: "0 8 * * *"   # 08:00 UTC → midnight PT during PST
-  workflow_dispatch: {}    # allow manual runs from the Actions tab
+    # UTC cron; we gate to only run at 00:00 PT
+    - cron: "0 8 * * *"   # PST midnight
+  workflow_dispatch: {}    # manual runs should also update files
 
 permissions:
-  contents: write          # needed to commit CSVs back into the repo
+  contents: write
 
 concurrency:
   group: reddit-tracker
   cancel-in-progress: true
 
-# Run most steps from your subfolder
+# your code lives in reddit_tracker/
 defaults:
   run:
     working-directory: reddit_tracker
@@ -22,18 +21,16 @@ defaults:
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        # (defaults.run.working-directory applies after checkout)
 
       - name: Show current time (UTC & PT)
         run: |
           echo "UTC now: $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
           TZ=America/Los_Angeles date '+PT now: %Y-%m-%d %H:%M:%S %Z'
 
-      # Gate: continue only when it's truly midnight in Pacific time
+      # Gate logs midnight PT; manual runs will bypass in later steps
       - name: Gate on Pacific midnight
         id: gate
         run: |
@@ -47,15 +44,19 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Note manual bypass
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: echo "Manual run detected — bypassing PT gate and executing all steps."
+
       - name: Set up Python
-        if: steps.gate.outputs.run == 'true'
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
       - name: Install dependencies
-        if: steps.gate.outputs.run == 'true'
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         run: |
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
@@ -64,7 +65,7 @@ jobs:
           fi
 
       - name: Run tracker
-        if: steps.gate.outputs.run == 'true'
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         env:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
@@ -74,21 +75,27 @@ jobs:
         run: |
           python reddit_post_tracker.py
 
-      # Persist a human-readable timestamp of successful runs
       - name: Record timestamps to file
-        if: steps.gate.outputs.run == 'true'
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         run: |
           mkdir -p reddit_metrics
           echo "UTC: $(date -u '+%Y-%m-%d %H:%M:%S %Z')" > reddit_metrics/last_run_time.txt
           TZ=America/Los_Angeles date '+PT: %Y-%m-%d %H:%M:%S %Z' >> reddit_metrics/last_run_time.txt
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "MODE: manual test" >> reddit_metrics/last_run_time.txt
+          else
+            echo "MODE: scheduled" >> reddit_metrics/last_run_time.txt
+          fi
 
-      # Commit new/changed CSVs + timestamp back to the repo
       - name: Commit CSVs and timestamp
-        if: steps.gate.outputs.run == 'true'
+        if: ${{ steps.gate.outputs.run == 'true' || github.event_name == 'workflow_dispatch' }}
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: update reddit metrics (midnight PT)"
+          commit_message: ${{ github.event_name == 'workflow_dispatch'
+            && 'chore: update reddit metrics (manual test)'
+            || 'chore: update reddit metrics (midnight PT)' }}
           file_pattern: |
             reddit_tracker/reddit_metrics/*.csv
             reddit_tracker/reddit_metrics/last_run_time.txt
+
 
